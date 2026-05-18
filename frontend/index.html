@@ -78,10 +78,10 @@
 
             <div id="result-section">
                 <div class="bg-white rounded-xl shadow-md p-6 text-center text-gray-400">
-    <p class="text-4xl mb-3">&#129658;</p>
-    <p class="font-medium">Remplissez le formulaire</p>
-    <p class="text-sm mt-1">puis cliquez sur Diagnostiquer</p>
-</div>
+                    <p class="text-4xl mb-3">&#129658;</p>
+                    <p class="font-medium">Remplissez le formulaire</p>
+                    <p class="text-sm mt-1">puis cliquez sur Diagnostiquer</p>
+                </div>
             </div>
 
         </div>
@@ -93,100 +93,137 @@
 
     <script>
         const API_URL = "http://localhost:8000";
+        const historique = [];
 
-async function diagnostiquer() {
-    const patient = {
-        age: parseInt(document.getElementById("age").value),
-        sexe: document.getElementById("sexe").value,
-        temperature: parseFloat(document.getElementById("temperature").value),
-        tension_sys: parseInt(document.getElementById("tension_sys").value),
-        toux: document.getElementById("toux").checked,
-        fatigue: document.getElementById("fatigue").checked,
-        maux_tete: document.getElementById("maux_tete").checked,
-        region: document.getElementById("region").value
-    };
+        async function diagnostiquer() {
+            const patient = {
+                age: parseInt(document.getElementById("age").value),
+                sexe: document.getElementById("sexe").value,
+                temperature: parseFloat(document.getElementById("temperature").value),
+                tension_sys: parseInt(document.getElementById("tension_sys").value),
+                toux: document.getElementById("toux").checked,
+                fatigue: document.getElementById("fatigue").checked,
+                maux_tete: document.getElementById("maux_tete").checked,
+                region: document.getElementById("region").value
+            };
 
-    if (!patient.age || !patient.temperature || !patient.tension_sys) {
-        afficherErreur("Veuillez remplir tous les champs.");
-        return;
-    }
+            if (!patient.age || !patient.temperature || !patient.tension_sys) {
+                afficherErreur("Veuillez remplir tous les champs.");
+                return;
+            }
 
-    afficherChargement();
+            afficherChargement();
 
-    try {
-        const response = await fetch(API_URL + "/predict", {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify(patient)
-        });
+            try {
+                const response = await fetch(API_URL + "/predict", {
+                    method: "POST",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify(patient)
+                });
 
-        if (!response.ok) {
-            const err = await response.json();
-            throw new Error(err.detail ? JSON.stringify(err.detail) : "Erreur serveur");
+                if (!response.ok) {
+                    const err = await response.json();
+                    throw new Error(err.detail ? JSON.stringify(err.detail) : "Erreur serveur");
+                }
+
+                const resultat = await response.json();
+                historique.unshift({
+                    diagnostic: resultat.diagnostic,
+                    probabilite: Math.round(resultat.probabilite * 100),
+                    confiance: resultat.confiance
+                });
+                if (historique.length > 5) historique.pop();
+                afficherResultat(resultat);
+                afficherHistorique();
+            } catch (error) {
+                afficherErreur("Erreur de connexion : " + error.message);
+            }
         }
 
-        const resultat = await response.json();
-        afficherResultat(resultat);
-    } catch (error) {
-        afficherErreur("Erreur de connexion : " + error.message);
-    }
-}
+        function afficherChargement() {
+            const section = document.getElementById("result-section");
+            section.innerHTML = `
+                <div class="bg-white rounded-xl shadow-md p-6 text-center">
+                    <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+                    <p class="text-gray-500">Analyse en cours ...</p>
+                </div>`;
+        }
 
-function afficherChargement() {
-    const section = document.getElementById("result-section");
-    section.innerHTML = `
-        <div class="bg-white rounded-xl shadow-md p-6 text-center">
-            <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
-            <p class="text-gray-500">Analyse en cours ...</p>
-        </div>`;
-}
+        function afficherResultat(r) {
+            const couleurs = {
+                paludisme: {bg:"bg-red-100", text:"text-red-800", bar:"bg-red-500", badge:"bg-red-500", emoji:"🌡️"},
+                grippe: {bg:"bg-orange-100", text:"text-orange-800", bar:"bg-orange-500", badge:"bg-orange-500", emoji:"❄️"},
+                typhoide: {bg:"bg-yellow-100", text:"text-yellow-800", bar:"bg-yellow-500", badge:"bg-yellow-500", emoji:"⚠️"},
+                sain: {bg:"bg-green-100", text:"text-green-800", bar:"bg-green-500", badge:"bg-green-500", emoji:"✅"}
+            };
 
-function afficherResultat(r) {
-    const couleurs = {
-        paludisme: {bg:"bg-red-100", text:"text-red-800", bar:"bg-red-500", badge:"bg-red-500"},
-        grippe: {bg:"bg-orange-100", text:"text-orange-800", bar:"bg-orange-500", badge:"bg-orange-500"},
-        typhoide: {bg:"bg-yellow-100", text:"text-yellow-800", bar:"bg-yellow-500", badge:"bg-yellow-500"},
-        sain: {bg:"bg-green-100", text:"text-green-800", bar:"bg-green-500", badge:"bg-green-500"}
-    };
+            const c = couleurs[r.diagnostic] || couleurs["sain"];
+            const pct = Math.round(r.probabilite * 100);
+            const section = document.getElementById("result-section");
 
-    const c = couleurs[r.diagnostic] || couleurs["sain"];
-    const pct = Math.round(r.probabilite * 100);
-    const section = document.getElementById("result-section");
+            section.innerHTML = `
+                <div class="bg-white rounded-xl shadow-md p-6">
+                    <h2 class="text-xl font-bold text-gray-800 mb-4">Resultat</h2>
+                    <div class="${c.bg} rounded-lg p-4 mb-4">
+                        <p class="text-sm text-gray-600">Diagnostic :</p>
+                        <p class="text-2xl font-bold ${c.text} uppercase mt-1">${c.emoji} ${r.diagnostic}</p>
+                    </div>
+                    <div class="mb-4">
+                        <div class="flex justify-between mb-1">
+                            <span class="text-sm text-gray-600">Probabilite</span>
+                            <span class="text-sm font-bold ${c.text}">${pct}%</span>
+                        </div>
+                        <div class="w-full bg-gray-200 rounded-full h-3">
+                            <div class="${c.bar} h-3 rounded-full transition-all duration-500" style="width: ${pct}%"></div>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-2 mb-3">
+                        <span class="${c.badge} text-white text-xs px-2 py-1 rounded-full">${r.confiance}</span>
+                        <span class="text-sm text-gray-600">confiance</span>
+                    </div>
+                    <div class="bg-gray-50 rounded-lg p-3">
+                        <p class="text-sm text-gray-700">${r.message}</p>
+                    </div>
+                </div>`;
+        }
 
-    section.innerHTML = `
-        <div class="bg-white rounded-xl shadow-md p-6">
-            <h2 class="text-xl font-bold text-gray-800 mb-4">Resultat</h2>
-            <div class="${c.bg} rounded-lg p-4 mb-4">
-                <p class="text-sm text-gray-600">Diagnostic :</p>
-                <p class="text-2xl font-bold ${c.text} uppercase mt-1">${r.diagnostic}</p>
-            </div>
-            <div class="mb-4">
-                <div class="flex justify-between mb-1">
-                    <span class="text-sm text-gray-600">Probabilite</span>
-                    <span class="text-sm font-bold ${c.text}">${pct}%</span>
-                </div>
-                <div class="w-full bg-gray-200 rounded-full h-3">
-                    <div class="${c.bar} h-3 rounded-full transition-all duration-500" style="width: ${pct}%"></div>
-                </div>
-            </div>
-            <div class="flex items-center gap-2 mb-3">
-                <span class="${c.badge} text-white text-xs px-2 py-1 rounded-full">${r.confiance}</span>
-                <span class="text-sm text-gray-600">confiance</span>
-            </div>
-            <div class="bg-gray-50 rounded-lg p-3">
-                <p class="text-sm text-gray-700">${r.message}</p>
-            </div>
-        </div>`;
-}
+        function afficherHistorique() {
+            const existing = document.getElementById("historique-section");
+            if (existing) existing.remove();
 
-function afficherErreur(msg) {
-    const section = document.getElementById("result-section");
-    section.innerHTML = `
-        <div class="bg-red-50 border border-red-200 rounded-xl p-6">
-            <p class="text-red-700 font-medium">${msg}</p>
-            <p class="text-red-500 text-sm mt-2">Verifiez votre connexion et reessayez.</p>
-        </div>`;
-}
+            let html = `<div id="historique-section" class="max-w-4xl mx-auto px-4 pb-8">
+                <div class="bg-white rounded-xl shadow-md p-6">
+                    <h2 class="text-xl font-bold text-gray-800 mb-4">Historique des consultations</h2>
+                    <table class="w-full text-sm">
+                        <thead>
+                            <tr class="text-gray-500 border-b">
+                                <th class="text-left pb-2">#</th>
+                                <th class="text-left pb-2">Diagnostic</th>
+                                <th class="text-left pb-2">Probabilite</th>
+                                <th class="text-left pb-2">Confiance</th>
+                            </tr>
+                        </thead>
+                        <tbody>`;
+            historique.forEach((h, i) => {
+                html += `<tr class="border-b">
+                    <td class="py-2">${i + 1}</td>
+                    <td class="py-2 font-medium uppercase">${h.diagnostic}</td>
+                    <td class="py-2">${h.probabilite}%</td>
+                    <td class="py-2">${h.confiance}</td>
+                </tr>`;
+            });
+            html += `</tbody></table></div></div>`;
+            document.querySelector("footer").insertAdjacentHTML("beforebegin", html);
+        }
+
+        function afficherErreur(msg) {
+            const section = document.getElementById("result-section");
+            section.innerHTML = `
+                <div class="bg-red-50 border border-red-200 rounded-xl p-6">
+                    <p class="text-red-700 font-medium">${msg}</p>
+                    <p class="text-red-500 text-sm mt-2">Verifiez votre connexion et reessayez.</p>
+                </div>`;
+        }
     </script>
 
 </body>
