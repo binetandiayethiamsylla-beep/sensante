@@ -1,34 +1,62 @@
 # api/main.py
 # API FastAPI pour SenSante - Assistant pre-diagnostic medical
 from fastapi import FastAPI
-
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+import os
+from dotenv import load_dotenv
+from groq import Groq
+import joblib
+import numpy as np
+
+# Charger les variables d'environnement
+load_dotenv()
+
+# Client Groq (charge au demarrage)
+groq_client = None
+groq_api_key = os.getenv("GROQ_API_KEY")
+if groq_api_key:
+    groq_client = Groq(api_key=groq_api_key)
+    print("Client Groq initialise.")
+else:
+    print("ATTENTION : GROQ_API_KEY non trouvee. "
+          "/explain sera desactive.")
 
 # --- Schemas Pydantic ---
 class PatientInput(BaseModel):
-    """Donnees d'entree : les symptomes d'un patient."""
-    age: int = Field(..., ge=0, le=120, description="Age en annees")
-    sexe: str = Field(..., description="Sexe : M ou F")
-    temperature: float = Field(..., ge=35.0, le=42.0, description="Temperature en Celsius")
-    tension_sys: int = Field(..., ge=60, le=250, description="Tension systolique")
-    toux: bool = Field(..., description="Presence de toux")
-    fatigue: bool = Field(..., description="Presence de fatigue")
-    maux_tete: bool = Field(..., description="Presence de maux de tete")
-    region: str = Field(..., description="Region du Senegal")
+    age: int = Field(..., ge=0, le=120)
+    sexe: str = Field(...)
+    temperature: float = Field(..., ge=35.0, le=42.0)
+    tension_sys: int = Field(..., ge=60, le=250)
+    toux: bool = Field(...)
+    fatigue: bool = Field(...)
+    maux_tete: bool = Field(...)
+    region: str = Field(...)
 
 class DiagnosticOutput(BaseModel):
-    """Donnees de sortie : le resultat du diagnostic."""
-    diagnostic: str = Field(..., description="Diagnostic predit")
-    probabilite: float = Field(..., description="Probabilite du diagnostic")
-    confiance: str = Field(..., description="Niveau de confiance")
-    message: str = Field(..., description="Recommandation")
+    diagnostic: str = Field(...)
+    probabilite: float = Field(...)
+    confiance: str = Field(...)
+    message: str = Field(...)
+
+class ExplainInput(BaseModel):
+    diagnostic: str = Field(...)
+    probabilite: float = Field(...)
+    age: int = Field(...)
+    sexe: str = Field(...)
+    temperature: float = Field(...)
+    region: str = Field(...)
+
+class ExplainOutput(BaseModel):
+    explication: str = Field(...)
+    modele_llm: str = Field(default="llama-3.1-8b-instant")
+
 # Creer l'application
 app = FastAPI(
     title="SenSante API",
     description="Assistant pre-diagnostic medical pour le Senegal",
-    version="0.2.0"
+    version="0.3.0"
 )
-from fastapi.middleware.cors import CORSMiddleware
 
 app.add_middleware(
     CORSMiddleware,
@@ -37,8 +65,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-import joblib
-import numpy as np
 
 # --- Charger le modele et les encodeurs au demarrage ---
 print("Chargement du modele ...")
@@ -49,57 +75,31 @@ feature_cols = joblib.load("models/feature_cols.pkl")
 print(f"Modele charge : {type(model).__name__}")
 print(f"Classes : {list(model.classes_)}")
 
-# Route de base : verifier que l'API fonctionne
 @app.get("/health")
 def health_check():
-    """Verification de l'etat de l'API."""
-    return {
-        "status": "ok",
-        "message": "SenSante API is running"
-    }
+    return {"status": "ok", "message": "SenSante API is running"}
+
 @app.post("/predict", response_model=DiagnosticOutput)
 def predict(patient: PatientInput):
-    """
-    Predire un diagnostic a partir des symptomes d'un patient.
-    Recoit les symptomes en JSON, renvoie le diagnostic,
-    la probabilite et une recommandation.
-    """
-    # 1. Encoder les variables categoriques
     try:
         sexe_enc = le_sexe.transform([patient.sexe])[0]
     except ValueError:
-        return DiagnosticOutput(
-            diagnostic="erreur",
-            probabilite=0.0,
-            confiance="aucune",
-            message=f"Sexe invalide : {patient.sexe}. Utiliser M ou F.")
+        return DiagnosticOutput(diagnostic="erreur", probabilite=0.0,
+            confiance="aucune", message=f"Sexe invalide : {patient.sexe}.")
     try:
         region_enc = le_region.transform([patient.region])[0]
     except ValueError:
-        return DiagnosticOutput(
-            diagnostic="erreur",
-            probabilite=0.0,
-            confiance="aucune",
-            message=f"Region inconnue : {patient.region}")
+        return DiagnosticOutput(diagnostic="erreur", probabilite=0.0,
+            confiance="aucune", message=f"Region inconnue : {patient.region}")
 
-    # 2. Construire le vecteur de features
-    features = np.array([[
-        patient.age,
-        sexe_enc,
-        patient.temperature,
-        patient.tension_sys,
-        int(patient.toux),
-        int(patient.fatigue),
-        int(patient.maux_tete),
-        region_enc
-    ]])
+    features = np.array([[patient.age, sexe_enc, patient.temperature,
+        patient.tension_sys, int(patient.toux), int(patient.fatigue),
+        int(patient.maux_tete), region_enc]])
 
-    # 3. Predire
     diagnostic = model.predict(features)[0]
     probas = model.predict_proba(features)[0]
     proba_max = float(probas.max())
 
-    # 4. Determiner le niveau de confiance
     if proba_max >= 0.7:
         confiance = "haute"
     elif proba_max >= 0.4:
@@ -107,7 +107,6 @@ def predict(patient: PatientInput):
     else:
         confiance = "faible"
 
-    # 5. Generer la recommandation
     messages = {
         "paludisme": "Suspicion de paludisme. Consultez un medecin rapidement.",
         "grippe": "Suspicion de grippe. Repos et hydratation recommandes.",
@@ -115,19 +114,53 @@ def predict(patient: PatientInput):
         "sain": "Pas de pathologie detectee. Continuez a surveiller."
     }
 
-    # 6. Renvoyer le resultat
-    return DiagnosticOutput(
-        diagnostic=diagnostic,
-        probabilite=round(proba_max, 2),
-        confiance=confiance,
-        message=messages.get(diagnostic, "Consultez un medecin.")
-    )
+    return DiagnosticOutput(diagnostic=diagnostic,
+        probabilite=round(proba_max, 2), confiance=confiance,
+        message=messages.get(diagnostic, "Consultez un medecin."))
+
 @app.get("/model-info")
 def model_info():
-    """Informations sur le modele charge."""
-    return {
-        "type": type(model).__name__,
-        "nombre_arbres": model.n_estimators,
-        "classes": list(model.classes_),
-        "nombre_features": model.n_features_in_
-    }
+    return {"type": type(model).__name__,
+            "nombre_arbres": model.n_estimators,
+            "classes": list(model.classes_),
+            "nombre_features": model.n_features_in_}
+
+SYSTEM_PROMPT = """Tu es un assistant medical senegalais.
+Tu recois un diagnostic et des donnees patient.
+Explique le resultat en francais simple,
+comme un medecin parlerait a son patient.
+Sois rassurant mais recommande toujours une consultation medicale.
+Maximum 3 phrases.
+Ne fais JAMAIS de diagnostic toi-meme.
+Tu expliques uniquement le diagnostic fourni."""
+
+@app.post("/explain", response_model=ExplainOutput)
+def explain(data: ExplainInput):
+    if not groq_client:
+        return ExplainOutput(
+            explication="Service d'explication indisponible. Cle API non configuree.",
+            modele_llm="aucun")
+
+    user_prompt = (
+        f"Patient : {data.sexe}, {data.age} ans, region {data.region}\n"
+        f"Temperature : {data.temperature} C\n"
+        f"Diagnostic du modele : {data.diagnostic} "
+        f"(probabilite {data.probabilite:.0%})\n"
+        f"Explique ce resultat au patient."
+    )
+
+    try:
+        response = groq_client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt}
+            ],
+            max_tokens=200,
+            temperature=0.3
+        )
+        explication = response.choices[0].message.content
+    except Exception as e:
+        explication = f"Erreur lors de l'appel au LLM : {str(e)}"
+
+    return ExplainOutput(explication=explication)
